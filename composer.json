@@ -1,0 +1,46 @@
+{
+  "name": "tempcord/tasks",
+  "description": "Scheduled tasks plugin for Tempcord framework",
+  "version": "0.5.0",
+  "type": "library",
+  "require": {
+    "php": "^8.5",
+    "tempcord/framework": "^0.6",
+    "ragnarok/fenrir": "^1",
+    "tempest/console": "^2",
+    "tempest/core": "^2"
+  },
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "CyberWolf.Studio",
+      "email": "hello@cyberwolf.studio",
+      "homepage": "https://cyberwolf.studio",
+      "role": "Developer"
+    }
+  ],
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "framework",
+    "php",
+    "tasks",
+    "scheduler",
+    "cron",
+    "tempcord"
+  ],
+  "autoload": {
+    "files": [
+      "src/functions.php"
+    ],
+    "psr-4": {
+      "Tempcord\\Plugins\\Tasks\\": "src/"
+    }
+  }
+}
