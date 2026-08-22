@@ -9,10 +9,9 @@ use React\EventLoop\LoopInterface;
 use Tempcord\Plugins\Tasks\Attributes\Task;
 use Tempcord\Plugins\Tasks\Support\CronExpression;
 use Tempcord\Plugins\Tasks\Support\TaskStats;
+use Tempest\Container\Container;
 use Tempest\Log\Logger;
 use Throwable;
-use function Tempest\get;
-use function Tempest\invoke;
 
 /**
  * Manages the execution of scheduled tasks
@@ -30,7 +29,8 @@ final class Runner
 
     public function __construct(
         private readonly LoopInterface $loop,
-        private readonly Logger $logger
+        private readonly Logger $logger,
+        private readonly Container $container,
     ) {}
 
     /**
@@ -39,7 +39,7 @@ final class Runner
     public function schedule(Task $task): void
     {
         if (!$task->enabled) {
-            $this->logger->info("⏭️  Task '{$task->getName()}' is disabled, skipping");
+            $this->logger->info("Task '{$task->getName()}' is disabled, skipping");
             return;
         }
 
@@ -52,7 +52,7 @@ final class Runner
             $this->scheduleCronTask($task);
         }
 
-        $this->logger->info("📅 Scheduled task '{$taskName}'", [
+        $this->logger->info("Scheduled task '{$taskName}'", [
             'schedule' => $task->getScheduleDescription(),
             'runOnBoot' => $task->runOnBoot,
         ]);
@@ -117,17 +117,18 @@ final class Runner
         $taskName = $task->getName();
         $startTime = microtime(true);
 
-        $this->logger->debug("▶️  Running task '{$taskName}'");
+        $this->logger->debug("Running task '{$taskName}'");
 
         try {
-            $instance = get($task->reflector->getDeclaringClass()->getName());
-            invoke($task->reflector, $instance);
+            $instance = $this->container->get($task->reflector->getDeclaringClass()->getName());
+
+            $task->reflector->invokeArgs($instance);
 
             $duration = round((microtime(true) - $startTime) * 1000, 2);
 
             $this->stats[$taskName]->recordSuccess($duration);
 
-            $this->logger->info("✅ Task '{$taskName}' completed", [
+            $this->logger->info("Task '{$taskName}' completed", [
                 'duration' => "{$duration}ms",
                 'runs' => $this->stats[$taskName]->totalRuns,
             ]);
@@ -136,7 +137,7 @@ final class Runner
 
             $this->stats[$taskName]->recordFailure($duration, $e->getMessage());
 
-            $this->logger->error("❌ Task '{$taskName}' failed", [
+            $this->logger->error("Task '{$taskName}' failed", [
                 'error' => $e->getMessage(),
                 'duration' => "{$duration}ms",
                 'failures' => $this->stats[$taskName]->failures,
@@ -156,7 +157,7 @@ final class Runner
         $this->loop->cancelTimer($this->timers[$taskName]);
         unset($this->timers[$taskName]);
 
-        $this->logger->info("🛑 Cancelled task '{$taskName}'");
+        $this->logger->info("Cancelled task '{$taskName}'");
 
         return true;
     }
@@ -177,6 +178,14 @@ final class Runner
     public function getTaskStats(string $taskName): ?TaskStats
     {
         return $this->stats[$taskName] ?? null;
+    }
+
+    /**
+     * @return array<string, TaskStats>
+     */
+    public function getStats(): array
+    {
+        return $this->stats;
     }
 
     /**

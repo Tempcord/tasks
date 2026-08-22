@@ -5,22 +5,24 @@ declare(strict_types=1);
 namespace Tempcord\Plugins\Tasks\Attributes;
 
 use Attribute;
-use Tempcord\Contract\CanBeHandled;
+use InvalidArgumentException;
 use Tempest\Reflection\MethodReflector;
 
+/**
+ * Runs a method on a schedule, either every so many seconds or on a cron
+ * expression.
+ */
 #[Attribute(Attribute::TARGET_METHOD)]
-final class Task implements CanBeHandled
+final class Task
 {
     public ?MethodReflector $reflector = null;
 
     /**
-     * Define a scheduled task
-     *
-     * @param int|null $interval Run every X seconds (mutually exclusive with cron)
-     * @param string|null $cron Cron expression for scheduling (mutually exclusive with interval)
-     * @param bool $runOnBoot Whether to run immediately when the bot starts
-     * @param string|null $name Optional name for the task (defaults to method name)
-     * @param bool $enabled Whether the task is enabled
+     * @param int|null $interval run every this many seconds; mutually exclusive with cron
+     * @param string|null $cron a cron expression; mutually exclusive with interval
+     * @param bool $runOnBoot also run once as soon as the bot starts
+     * @param string|null $name defaults to the method's own name
+     * @param bool $enabled a disabled task is discovered but never scheduled
      */
     public function __construct(
         public readonly ?int $interval = null,
@@ -30,15 +32,15 @@ final class Task implements CanBeHandled
         public readonly bool $enabled = true,
     ) {
         if ($interval === null && $cron === null) {
-            throw new \InvalidArgumentException('Task must have either an interval or cron expression');
+            throw new InvalidArgumentException('Task must have either an interval or cron expression');
         }
 
         if ($interval !== null && $cron !== null) {
-            throw new \InvalidArgumentException('Task cannot have both interval and cron expression');
+            throw new InvalidArgumentException('Task cannot have both interval and cron expression');
         }
 
         if ($interval !== null && $interval < 1) {
-            throw new \InvalidArgumentException('Task interval must be at least 1 second');
+            throw new InvalidArgumentException('Task interval must be at least 1 second');
         }
     }
 
@@ -47,41 +49,21 @@ final class Task implements CanBeHandled
         $this->reflector = $reflector;
     }
 
-    /**
-     * Get the task name (method name if not specified)
-     */
     public function getName(): string
     {
-        if ($this->name !== null) {
-            return $this->name;
-        }
-
-        if ($this->reflector !== null) {
-            return $this->reflector->getName();
-        }
-
-        return 'unknown';
+        return $this->name ?? $this->reflector?->getName() ?? 'unknown';
     }
 
-    /**
-     * Check if this is an interval-based task
-     */
     public function isInterval(): bool
     {
         return $this->interval !== null;
     }
 
-    /**
-     * Check if this is a cron-based task
-     */
     public function isCron(): bool
     {
         return $this->cron !== null;
     }
 
-    /**
-     * Get a human-readable schedule description
-     */
     public function getScheduleDescription(): string
     {
         if ($this->interval !== null) {
@@ -91,32 +73,26 @@ final class Task implements CanBeHandled
         return "cron: {$this->cron}";
     }
 
-    /**
-     * Format interval into human-readable string
-     */
     private function formatInterval(int $seconds): string
     {
         if ($seconds < 60) {
-            return "every {$seconds} second" . ($seconds > 1 ? 's' : '');
+            return 'every ' . $seconds . ' second' . ($seconds > 1 ? 's' : '');
         }
 
         if ($seconds < 3600) {
-            $minutes = (int) ($seconds / 60);
-            return "every {$minutes} minute" . ($minutes > 1 ? 's' : '');
+            $minutes = intdiv($seconds, 60);
+
+            return 'every ' . $minutes . ' minute' . ($minutes > 1 ? 's' : '');
         }
 
         if ($seconds < 86400) {
-            $hours = (int) ($seconds / 3600);
-            return "every {$hours} hour" . ($hours > 1 ? 's' : '');
+            $hours = intdiv($seconds, 3600);
+
+            return 'every ' . $hours . ' hour' . ($hours > 1 ? 's' : '');
         }
 
-        $days = (int) ($seconds / 86400);
-        return "every {$days} day" . ($days > 1 ? 's' : '');
-    }
+        $days = intdiv($seconds, 86400);
 
-    public \Tempcord\Support\Commands\CommandHandler $handler {
-        get {
-            return $this->handler;
-        }
+        return 'every ' . $days . ' day' . ($days > 1 ? 's' : '');
     }
 }
