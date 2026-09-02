@@ -4,28 +4,28 @@ declare(strict_types=1);
 
 namespace Tempcord\Plugins\Tasks;
 
-use function Tempest\get;
+use Tempcord\Plugins\Tasks\Support\TaskStats;
+use function Tempest\Container\get;
 
 if (!function_exists('Tempcord\Plugins\Tasks\tasks')) {
     /**
-     * Get the tasks registry for managing scheduled tasks
+     * The task registry, for inspecting or cancelling scheduled tasks.
+     *
+     * Prefer injecting Registry where you can; this exists for the places a
+     * container is awkward to reach, such as a closure in configuration.
      */
     function tasks(): Registry
     {
         return get(Registry::class);
     }
 
-    /**
-     * Cancel a scheduled task by name
-     */
     function cancelTask(string $taskName): bool
     {
         return tasks()->cancelTask($taskName);
     }
 
     /**
-     * Get task statistics
-     * @return array<string, Support\TaskStats>
+     * @return array<string, TaskStats>
      */
     function taskStats(): array
     {

@@ -7,14 +7,24 @@ Scheduled tasks plugin for the Tempcord Discord bot framework. Provides cron-bas
 - **Interval-based tasks** - Run tasks at regular intervals (every X seconds)
 - **Cron-based tasks** - Schedule tasks using standard cron expressions
 - **Task statistics** - Track execution times, success rates, and failures
-- **Automatic discovery** - Tasks are auto-discovered via PHP attributes
+- **Automatic discovery** - Tasks are auto-discovered via PHP attributes, in your bot or in
+  any package you install
 - **Run on boot** - Optionally run tasks immediately when the bot starts
+
+## Requirements
+
+- PHP 8.5 or newer
+- `tempcord/framework` 0.7 or newer
 
 ## Installation
 
 ```bash
-composer require tempcord/tasks-plugin
+composer require tempcord/tasks
 ```
+
+That is the whole setup. Tempest discovers the package, `TasksPlugin` is picked up because
+it implements `Tempcord\Plugins\Plugin`, and the scheduler starts with the bot — there is
+nothing to register by hand.
 
 ## Usage
 

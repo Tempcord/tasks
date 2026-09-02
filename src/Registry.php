@@ -9,96 +9,89 @@ use Ragnarok\Fenrir\Extension\Extension;
 use React\EventLoop\Loop;
 use Tempcord\Plugins\Tasks\Attributes\Task;
 use Tempcord\Plugins\Tasks\Support\TaskStats;
+use Tempest\Container\Container;
 use Tempest\Container\Singleton;
 use Tempest\Log\Logger;
-use function Tempest\get;
 
+/**
+ * Holds every discovered task and starts them once Discord is ready.
+ */
 #[Singleton]
-class Registry implements Extension
+final class Registry implements Extension
 {
-    /** @var array<Task> */
+    /** @var array<string, Task> */
     private array $tasks = [];
 
     private ?Runner $runner = null;
 
-    public function __construct() {}
+    public function __construct(
+        private readonly Container $container,
+        private readonly Logger $logger,
+    ) {}
 
-    /**
-     * Register a task
-     */
     public function register(Task $task): void
     {
-        $this->tasks[] = $task;
+        // Keyed by name so a task discovered twice is scheduled once.
+        $this->tasks[$task->getName()] = $task;
     }
 
     /**
-     * Initialize the task runner when Discord is ready
+     * Called by Fenrir once the extension is registered, which the plugin does
+     * as the bot boots.
      */
     public function initialize(Discord $discord): void
     {
-        if (empty($this->tasks)) {
+        if ($this->tasks === []) {
             return;
         }
 
-        $logger = get(Logger::class);
-        $loop = Loop::get();
+        $this->runner ??= new Runner(Loop::get(), $this->logger, $this->container);
 
-        $this->runner = new Runner($loop, $logger);
-
-        // Schedule all tasks
         foreach ($this->tasks as $task) {
             $this->runner->schedule($task);
         }
 
-        $logger->info("📋 Task scheduler initialized", [
-            'tasks' => count($this->tasks),
-        ]);
+        $this->logger->info('Task scheduler initialized', ['tasks' => count($this->tasks)]);
     }
 
-    /**
-     * Cancel a specific task
-     */
     public function cancelTask(string $taskName): bool
     {
         return $this->runner?->cancel($taskName) ?? false;
     }
 
-    /**
-     * Cancel all tasks
-     */
     public function cancelAllTasks(): void
     {
         $this->runner?->cancelAll();
     }
 
     /**
-     * Get statistics for all tasks
+     * Execution statistics per task, empty until the scheduler has started.
+     *
      * @return array<string, TaskStats>
      */
     public function getStats(): array
     {
-        return $this->runner ?? [];
+        return $this->runner?->getStats() ?? [];
     }
 
     /**
-     * Get list of scheduled task names
-     * @return array<string>
+     * @return list<string>
      */
     public function getScheduledTasks(): array
     {
         return $this->runner?->getScheduledTasks() ?? [];
     }
 
-    /**
-     * Get a number of registered tasks
-     */
     public function count(): int
     {
         return count($this->tasks);
     }
 
+    /**
+     * @return list<Task>
+     */
     public function getAllTasks(): array
     {
-        return $this->tasks;
+        return array_values($this->tasks);
     }
 }
