@@ -4,82 +4,39 @@ declare(strict_types=1);
 
 namespace Tempcord\Plugins\Tasks;
 
-use Ragnarok\Fenrir\Discord;
-use Ragnarok\Fenrir\Extension\Extension;
-use React\EventLoop\Loop;
-use Tempcord\Plugins\Tasks\Attributes\Task;
+use React\EventLoop\LoopInterface;
+use Tempcord\Plugins\Tasks\Definitions\TaskDefinition;
 use Tempcord\Plugins\Tasks\Support\TaskStats;
 use Tempest\Container\Container;
 use Tempest\Container\Singleton;
 use Tempest\Log\Logger;
 
 /**
- * Holds every discovered task and starts them once Discord is ready.
+ * Holds every discovered task and puts it on the event loop.
  */
 #[Singleton]
-final class Registry implements Extension
+final class Registry
 {
-    /** @var array<string, Task> */
+    /** @var array<string, TaskDefinition> keyed by name, so a task discovered twice is scheduled once */
     private array $tasks = [];
 
     private ?Runner $runner = null;
 
     public function __construct(
         private readonly Container $container,
-        private readonly Logger $logger,
     ) {}
 
-    public function register(Task $task): void
+    public function add(TaskDefinition $task): void
     {
-        // Keyed by name so a task discovered twice is scheduled once.
-        $this->tasks[$task->getName()] = $task;
+        $this->tasks[$task->name] = $task;
     }
 
     /**
-     * Called by Fenrir once the extension is registered, which the plugin does
-     * as the bot boots.
+     * @return list<TaskDefinition>
      */
-    public function initialize(Discord $discord): void
+    public function all(): array
     {
-        if ($this->tasks === []) {
-            return;
-        }
-
-        $this->runner ??= new Runner(Loop::get(), $this->logger, $this->container);
-
-        foreach ($this->tasks as $task) {
-            $this->runner->schedule($task);
-        }
-
-        $this->logger->info('Task scheduler initialized', ['tasks' => count($this->tasks)]);
-    }
-
-    public function cancelTask(string $taskName): bool
-    {
-        return $this->runner?->cancel($taskName) ?? false;
-    }
-
-    public function cancelAllTasks(): void
-    {
-        $this->runner?->cancelAll();
-    }
-
-    /**
-     * Execution statistics per task, empty until the scheduler has started.
-     *
-     * @return array<string, TaskStats>
-     */
-    public function getStats(): array
-    {
-        return $this->runner?->getStats() ?? [];
-    }
-
-    /**
-     * @return list<string>
-     */
-    public function getScheduledTasks(): array
-    {
-        return $this->runner?->getScheduledTasks() ?? [];
+        return array_values($this->tasks);
     }
 
     public function count(): int
@@ -88,10 +45,58 @@ final class Registry implements Extension
     }
 
     /**
-     * @return list<Task>
+     * Arms every task's timer. Nothing takes a turn until the loop itself runs,
+     * which is after the gateway opens.
+     *
+     * @return list<string> what was scheduled, for the caller to report
      */
-    public function getAllTasks(): array
+    public function start(LoopInterface $loop): array
     {
-        return array_values($this->tasks);
+        if ($this->tasks === []) {
+            return [];
+        }
+
+        /*
+         * Resolved here rather than in the constructor: discovery builds this
+         * registry while the container is still being assembled, before the
+         * initializers that provide the logger have themselves been found.
+         */
+        $this->runner = new Runner($loop, $this->container, $this->container->get(Logger::class));
+
+        $scheduled = [];
+
+        foreach ($this->tasks as $task) {
+            if ($this->runner->schedule($task)) {
+                $scheduled[] = $task->name . ' (' . $task->schedule() . ')';
+            }
+        }
+
+        return $scheduled;
+    }
+
+    public function cancel(string $taskName): bool
+    {
+        return $this->runner?->cancel($taskName) ?? false;
+    }
+
+    public function cancelAll(): void
+    {
+        $this->runner?->cancelAll();
+    }
+
+    /**
+     * @return array<string, TaskStats>
+     */
+    public function stats(): array
+    {
+        return $this->runner?->stats() ?? [];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function scheduled(): array
+    {
+        return $this->runner?->scheduled() ?? [];
     }
 }

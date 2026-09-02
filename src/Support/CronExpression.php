@@ -7,93 +7,117 @@ namespace Tempcord\Plugins\Tasks\Support;
 use DateTimeImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
- * Simple cron expression parser
+ * A five field cron expression.
  *
- * Supports standard 5-field cron format:
- * ┌───────────── minute (0-59)
- * │ ┌───────────── hour (0-23)
- * │ │ ┌───────────── day of month (1-31)
- * │ │ │ ┌───────────── month (1-12)
- * │ │ │ │ ┌───────────── day of week (0-6, Sunday = 0)
- * │ │ │ │ │
- * * * * * *
+ *     ┌───────────── minute (0-59)
+ *     │ ┌───────────── hour (0-23)
+ *     │ │ ┌───────────── day of month (1-31)
+ *     │ │ │ ┌───────────── month (1-12)
+ *     │ │ │ │ ┌───────────── day of week (0-6, Sunday = 0)
+ *     │ │ │ │ │
+ *     * * * * *
  */
 final class CronExpression
 {
+    /** @var list<int> */
     private array $minutes;
+
+    /** @var list<int> */
     private array $hours;
+
+    /** @var list<int> */
     private array $daysOfMonth;
+
+    /** @var list<int> */
     private array $months;
+
+    /** @var list<int> */
     private array $daysOfWeek;
 
+    /**
+     * Whether each of the two day fields names particular days rather than
+     * standing open. Cron reads the pair as "or" when both are restricted.
+     */
+    private bool $dayOfMonthRestricted;
+
+    private bool $dayOfWeekRestricted;
+
     public function __construct(
-        public readonly string $expression
+        public readonly string $expression,
     ) {
         $this->parse($expression);
     }
 
-    /**
-     * Check if the cron expression matches the given time
-     */
-    public function matches(DateTimeInterface $dateTime): bool
+    public function matches(DateTimeInterface $moment): bool
     {
-        $minute = (int) $dateTime->format('i');
-        $hour = (int) $dateTime->format('G');
-        $dayOfMonth = (int) $dateTime->format('j');
-        $month = (int) $dateTime->format('n');
-        $dayOfWeek = (int) $dateTime->format('w');
+        $matchesTime = in_array((int) $moment->format('i'), $this->minutes, true)
+            && in_array((int) $moment->format('G'), $this->hours, true)
+            && in_array((int) $moment->format('n'), $this->months, true);
 
-        return in_array($minute, $this->minutes, true)
-            && in_array($hour, $this->hours, true)
-            && in_array($dayOfMonth, $this->daysOfMonth, true)
-            && in_array($month, $this->months, true)
-            && in_array($dayOfWeek, $this->daysOfWeek, true);
+        return $matchesTime && $this->matchesDay($moment);
     }
 
     /**
-     * Get the next run time after the given time
+     * Cron's one genuine oddity: when a line restricts the day of the month
+     * *and* the day of the week, it runs on days matching either, not both. So
+     * `0 0 1 * 1` is the first of the month and every Monday, which is what
+     * anyone writing it expects and not what an "and" would give them.
+     */
+    private function matchesDay(DateTimeInterface $moment): bool
+    {
+        $dayOfMonth = in_array((int) $moment->format('j'), $this->daysOfMonth, true);
+        $dayOfWeek = in_array((int) $moment->format('w'), $this->daysOfWeek, true);
+
+        if ($this->dayOfMonthRestricted && $this->dayOfWeekRestricted) {
+            return $dayOfMonth || $dayOfWeek;
+        }
+
+        return $dayOfMonth && $dayOfWeek;
+    }
+
+    /**
+     * The first minute at or after the one following the given moment that this
+     * expression matches.
      */
     public function getNextRunDate(DateTimeInterface $from): DateTimeImmutable
     {
-        $next = DateTimeImmutable::createFromInterface($from);
-        $next = $next->modify('+1 minute')->setTime(
-            (int) $next->modify('+1 minute')->format('G'),
-            (int) $next->modify('+1 minute')->format('i'),
-            0
-        );
+        $next = DateTimeImmutable::createFromInterface($from)
+            ->modify('+1 minute')
+            ->setTime(
+                (int) DateTimeImmutable::createFromInterface($from)->modify('+1 minute')->format('G'),
+                (int) DateTimeImmutable::createFromInterface($from)->modify('+1 minute')->format('i'),
+                0,
+            );
 
-        // Search for up to 4 years to find next match
-        $maxIterations = 60 * 24 * 366 * 4;
+        // A day of the month that never comes round in a given month — the 31st
+        // of February — still resolves within four years, or not at all.
+        $limit = 60 * 24 * 366 * 4;
 
-        for ($i = 0; $i < $maxIterations; $i++) {
+        for ($minute = 0; $minute < $limit; $minute++) {
             if ($this->matches($next)) {
                 return $next;
             }
+
             $next = $next->modify('+1 minute');
         }
 
-        throw new \RuntimeException('Could not find next run date within 4 years');
+        throw new RuntimeException(
+            'The expression "' . $this->expression . '" does not come round within four years.',
+        );
     }
 
-    /**
-     * Get seconds until the next run
-     */
     public function getSecondsUntilNextRun(?DateTimeInterface $from = null): int
     {
         $from ??= new DateTimeImmutable();
-        $next = $this->getNextRunDate($from);
 
-        return $next->getTimestamp() - $from->getTimestamp();
+        return $this->getNextRunDate($from)->getTimestamp() - $from->getTimestamp();
     }
 
-    /**
-     * Parse the cron expression
-     */
     private function parse(string $expression): void
     {
-        // Handle common aliases
         $expression = match (strtolower(trim($expression))) {
             '@yearly', '@annually' => '0 0 1 1 *',
             '@monthly' => '0 0 1 * *',
@@ -103,11 +127,11 @@ final class CronExpression
             default => trim($expression),
         };
 
-        $parts = preg_split('/\s+/', $expression);
+        $parts = preg_split('/\s+/', $expression) ?: [];
 
         if (count($parts) !== 5) {
             throw new InvalidArgumentException(
-                "Invalid cron expression '{$expression}'. Expected 5 fields: minute hour day month weekday"
+                'Invalid cron expression "' . $expression . '". Expected 5 fields: minute hour day month weekday',
             );
         }
 
@@ -118,68 +142,71 @@ final class CronExpression
         $this->daysOfMonth = $this->parseField($dayOfMonth, 1, 31);
         $this->months = $this->parseField($month, 1, 12);
         $this->daysOfWeek = $this->parseField($dayOfWeek, 0, 6);
+
+        $this->dayOfMonthRestricted = trim($dayOfMonth) !== '*';
+        $this->dayOfWeekRestricted = trim($dayOfWeek) !== '*';
     }
 
     /**
-     * Parse a single cron field
+     * @return list<int>
      */
     private function parseField(string $field, int $min, int $max): array
     {
         $values = [];
 
-        // Handle comma-separated values
-        $parts = explode(',', $field);
-
-        foreach ($parts as $part) {
-            $values = array_merge($values, $this->parsePart($part, $min, $max));
+        foreach (explode(',', $field) as $part) {
+            $values = [...$values, ...$this->parsePart($part, $min, $max)];
         }
 
-        $values = array_unique($values);
+        $values = array_values(array_unique($values));
         sort($values);
 
         return $values;
     }
 
     /**
-     * Parse a single part of a cron field
+     * @return list<int>
      */
     private function parsePart(string $part, int $min, int $max): array
     {
-        // Handle wildcard (*)
         if ($part === '*') {
             return range($min, $max);
         }
 
-        // Handle step values (*/5, 1-10/2)
         if (str_contains($part, '/')) {
             [$range, $step] = explode('/', $part, 2);
             $step = (int) $step;
 
-            if ($range === '*') {
-                $rangeValues = range($min, $max);
-            } else {
-                $rangeValues = $this->parsePart($range, $min, $max);
+            if ($step < 1) {
+                throw new InvalidArgumentException('A cron step must be at least 1, got "' . $part . '".');
             }
 
+            $values = $range === '*' ? range($min, $max) : $this->parsePart($range, $min, $max);
+
+            /*
+             * Counted from where the range starts, not from the bottom of the
+             * field: 1-10/2 is 1,3,5,7,9 — every second value beginning at one
+             * — and not 2,4,6,8,10.
+             */
+            $start = $values[0];
+
             return array_values(array_filter(
-                $rangeValues,
-                fn($v) => ($v - $min) % $step === 0
+                $values,
+                static fn(int $value) => ($value - $start) % $step === 0,
             ));
         }
 
-        // Handle ranges (1-5)
         if (str_contains($part, '-')) {
-            [$start, $end] = explode('-', $part, 2);
-            $start = max($min, (int) $start);
-            $end = min($max, (int) $end);
-            return range($start, $end);
+            [$from, $to] = explode('-', $part, 2);
+
+            return range(max($min, (int) $from), min($max, (int) $to));
         }
 
-        // Handle single value
         $value = (int) $part;
-        if ($value < $min || $value > $max) {
+
+        if ($value < $min || $value > $max || !ctype_digit(trim($part))) {
             throw new InvalidArgumentException(
-                "Value {$value} is out of range [{$min}-{$max}]"
+                'Value "' . $part . '" is out of range [' . $min . '-' . $max . ']',
             );
         }
 

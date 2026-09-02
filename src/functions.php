@@ -5,14 +5,13 @@ declare(strict_types=1);
 namespace Tempcord\Plugins\Tasks;
 
 use Tempcord\Plugins\Tasks\Support\TaskStats;
+
 use function Tempest\Container\get;
 
 if (!function_exists('Tempcord\Plugins\Tasks\tasks')) {
     /**
-     * The task registry, for inspecting or cancelling scheduled tasks.
-     *
-     * Prefer injecting Registry where you can; this exists for the places a
-     * container is awkward to reach, such as a closure in configuration.
+     * The task registry, for reaching the schedule from somewhere the container
+     * does not inject into.
      */
     function tasks(): Registry
     {
@@ -21,7 +20,7 @@ if (!function_exists('Tempcord\Plugins\Tasks\tasks')) {
 
     function cancelTask(string $taskName): bool
     {
-        return tasks()->cancelTask($taskName);
+        return tasks()->cancel($taskName);
     }
 
     /**
@@ -29,6 +28,6 @@ if (!function_exists('Tempcord\Plugins\Tasks\tasks')) {
      */
     function taskStats(): array
     {
-        return tasks()->getStats();
+        return tasks()->stats();
     }
 }

@@ -1,16 +1,21 @@
 {
   "name": "tempcord/tasks",
   "description": "Scheduled tasks plugin for Tempcord framework",
-  "version": "0.7.0",
   "type": "library",
+  "license": "MIT",
   "require": {
     "php": "^8.5",
-    "tempcord/framework": "^0.7",
-    "ragnarok/fenrir": "^1.0",
+    "tempcord/framework": ">=0.10 <1.0",
+    "react/event-loop": "^1.3",
+    "react/async": "^4.0",
     "tempest/console": "^3.18",
-    "tempest/core": "^3.18"
+    "tempest/core": "^3.18",
+    "tempest/log": "^3.18"
   },
-  "license": "MIT",
+  "require-dev": {
+    "phpunit/phpunit": "^13.0",
+    "phpstan/phpstan": "^2.0"
+  },
   "authors": [
     {
       "name": "CyberWolf.Studio",
@@ -42,10 +47,6 @@
     "psr-4": {
       "Tempcord\\Plugins\\Tasks\\": "src/"
     }
-  },
-  "require-dev": {
-    "phpunit/phpunit": "^13.0",
-    "phpstan/phpstan": "^2.1"
   },
   "autoload-dev": {
     "psr-4": {

@@ -4,150 +4,154 @@ declare(strict_types=1);
 
 namespace Tempcord\Plugins\Tasks;
 
-use DateTimeImmutable;
 use React\EventLoop\LoopInterface;
-use Tempcord\Plugins\Tasks\Attributes\Task;
+use React\EventLoop\TimerInterface;
+use Tempcord\Plugins\Tasks\Definitions\TaskDefinition;
 use Tempcord\Plugins\Tasks\Support\CronExpression;
 use Tempcord\Plugins\Tasks\Support\TaskStats;
 use Tempest\Container\Container;
 use Tempest\Log\Logger;
 use Throwable;
 
+use function React\Async\async;
+
 /**
- * Manages the execution of scheduled tasks
+ * Runs scheduled tasks, and keeps them running.
+ *
+ * A timer is less forgiving than an event listener: it fires again whether or
+ * not the last turn finished or threw, forever. Both are contained here, so
+ * that a task cannot quietly stop the bot doing its other work.
  */
 final class Runner
 {
-    /** @var array<string, mixed> Timer references for cleanup */
+    /** @var array<string, TimerInterface> */
     private array $timers = [];
 
-    /** @var array<string, DateTimeImmutable> Last run times for cron tasks */
-    private array $lastRunTimes = [];
+    /** @var array<string, true> tasks whose previous turn has not finished */
+    private array $running = [];
 
-    /** @var array<string, TaskStats> Task execution statistics */
+    /** @var array<string, TaskStats> */
     private array $stats = [];
 
     public function __construct(
         private readonly LoopInterface $loop,
-        private readonly Logger $logger,
         private readonly Container $container,
+        private readonly Logger $logger,
     ) {}
 
     /**
-     * Schedule a task for execution
+     * @return bool whether the task was put on the schedule
      */
-    public function schedule(Task $task): void
+    public function schedule(TaskDefinition $task): bool
     {
         if (!$task->enabled) {
-            $this->logger->info("Task '{$task->getName()}' is disabled, skipping");
+            $this->logger->info('Task ' . $task->name . ' is disabled and was left out of the schedule.');
+
+            return false;
+        }
+
+        $this->stats[$task->name] = new TaskStats($task->name);
+
+        if ($task->runOnBoot) {
+            /*
+             * On the next tick rather than now, so a task cannot run before the
+             * rest of the bot has finished being wired together.
+             */
+            $this->loop->futureTick(fn() => $this->run($task));
+        }
+
+        $task->isInterval()
+            ? $this->armInterval($task)
+            : $this->armCron($task, new CronExpression((string) $task->cron));
+
+        return true;
+    }
+
+    private function armInterval(TaskDefinition $task): void
+    {
+        $this->timers[$task->name] = $this->loop->addPeriodicTimer(
+            (int) $task->interval,
+            fn() => $this->run($task),
+        );
+    }
+
+    /**
+     * Cron is armed one turn at a time, for the exact number of seconds until
+     * the next minute that matches.
+     *
+     * Waking every minute instead would drift: the first tick lands at whatever
+     * offset within the minute the bot happened to start at, and once the drift
+     * crosses a minute boundary a matching minute is stepped over entirely and
+     * the task silently does not run that hour.
+     */
+    private function armCron(TaskDefinition $task, CronExpression $cron): void
+    {
+        $seconds = max(1, $cron->getSecondsUntilNextRun());
+
+        $this->timers[$task->name] = $this->loop->addTimer($seconds, function () use ($task, $cron): void {
+            $this->run($task);
+
+            // Re-armed from the turn just taken, so the wait is recomputed
+            // rather than accumulated.
+            $this->armCron($task, $cron);
+        });
+    }
+
+    private function run(TaskDefinition $task): void
+    {
+        /*
+         * A task that takes longer than its own interval would otherwise be
+         * started again alongside itself, and each turn would make the next one
+         * slower until nothing else got a look in.
+         */
+        if (isset($this->running[$task->name])) {
+            $this->logger->warning(
+                'Task ' . $task->name . ' is still busy from its last turn; skipping this one.',
+            );
+
             return;
         }
 
-        $taskName = $task->getName();
-        $this->stats[$taskName] = new TaskStats($taskName);
+        $this->running[$task->name] = true;
+        $startedAt = microtime(true);
 
-        if ($task->isInterval()) {
-            $this->scheduleIntervalTask($task);
-        } else {
-            $this->scheduleCronTask($task);
-        }
+        /*
+         * In a fiber, so a task may await the REST API the way a command
+         * handler does, and inside a catch, so one that throws is logged rather
+         * than travelling up into the event loop and taking the process with it.
+         */
+        async(function () use ($task, $startedAt): void {
+            try {
+                $task->method->invokeArgs($this->container->get($task->handler), []);
 
-        $this->logger->info("Scheduled task '{$taskName}'", [
-            'schedule' => $task->getScheduleDescription(),
-            'runOnBoot' => $task->runOnBoot,
-        ]);
-    }
+                $this->record($task)?->recordSuccess($this->msSince($startedAt));
 
-    /**
-     * Schedule an interval-based task
-     */
-    private function scheduleIntervalTask(Task $task): void
-    {
-        $taskName = $task->getName();
-        $interval = $task->interval;
+                // Debug, not info: a task running every ten seconds would
+                // otherwise write eight thousand lines a day saying nothing.
+                $this->logger->debug('Task ' . $task->name . ' finished.');
+            } catch (Throwable $throwable) {
+                $this->record($task)?->recordFailure($this->msSince($startedAt), $throwable->getMessage());
 
-        // Run immediately if configured
-        if ($task->runOnBoot) {
-            $this->loop->futureTick(fn() => $this->executeTask($task));
-        }
-
-        // Schedule periodic execution
-        $timer = $this->loop->addPeriodicTimer($interval, fn() => $this->executeTask($task));
-        $this->timers[$taskName] = $timer;
-    }
-
-    /**
-     * Schedule a cron-based task
-     */
-    private function scheduleCronTask(Task $task): void
-    {
-        $taskName = $task->getName();
-        $cron = new CronExpression($task->cron);
-
-        // Run immediately if configured
-        if ($task->runOnBoot) {
-            $this->loop->futureTick(fn() => $this->executeTask($task));
-        }
-
-        // Check every minute if cron matches
-        $timer = $this->loop->addPeriodicTimer(60, function () use ($task, $cron, $taskName) {
-            $now = new DateTimeImmutable();
-            $currentMinute = $now->format('Y-m-d H:i');
-
-            // Avoid running twice in the same minute
-            $lastRun = $this->lastRunTimes[$taskName] ?? null;
-            if ($lastRun !== null && $lastRun->format('Y-m-d H:i') === $currentMinute) {
-                return;
+                $this->logger->error(
+                    'Task ' . $task->name . ' failed: ' . $throwable->getMessage(),
+                    ['exception' => $throwable],
+                );
+            } finally {
+                unset($this->running[$task->name]);
             }
-
-            if ($cron->matches($now)) {
-                $this->lastRunTimes[$taskName] = $now;
-                $this->executeTask($task);
-            }
-        });
-
-        $this->timers[$taskName] = $timer;
+        })();
     }
 
-    /**
-     * Execute a task
-     */
-    private function executeTask(Task $task): void
+    private function record(TaskDefinition $task): ?TaskStats
     {
-        $taskName = $task->getName();
-        $startTime = microtime(true);
-
-        $this->logger->debug("Running task '{$taskName}'");
-
-        try {
-            $instance = $this->container->get($task->reflector->getDeclaringClass()->getName());
-
-            $task->reflector->invokeArgs($instance);
-
-            $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-            $this->stats[$taskName]->recordSuccess($duration);
-
-            $this->logger->info("Task '{$taskName}' completed", [
-                'duration' => "{$duration}ms",
-                'runs' => $this->stats[$taskName]->totalRuns,
-            ]);
-        } catch (Throwable $e) {
-            $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-            $this->stats[$taskName]->recordFailure($duration, $e->getMessage());
-
-            $this->logger->error("Task '{$taskName}' failed", [
-                'error' => $e->getMessage(),
-                'duration' => "{$duration}ms",
-                'failures' => $this->stats[$taskName]->failures,
-            ]);
-        }
+        return $this->stats[$task->name] ?? null;
     }
 
-    /**
-     * Cancel a scheduled task
-     */
+    private function msSince(float $startedAt): float
+    {
+        return round((microtime(true) - $startedAt) * 1000, 2);
+    }
+
     public function cancel(string $taskName): bool
     {
         if (!isset($this->timers[$taskName])) {
@@ -157,14 +161,11 @@ final class Runner
         $this->loop->cancelTimer($this->timers[$taskName]);
         unset($this->timers[$taskName]);
 
-        $this->logger->info("Cancelled task '{$taskName}'");
+        $this->logger->info('Task ' . $taskName . ' was cancelled.');
 
         return true;
     }
 
-    /**
-     * Cancel all scheduled tasks
-     */
     public function cancelAll(): void
     {
         foreach (array_keys($this->timers) as $taskName) {
@@ -172,10 +173,7 @@ final class Runner
         }
     }
 
-    /**
-     * Get statistics for a specific task
-     */
-    public function getTaskStats(string $taskName): ?TaskStats
+    public function statsFor(string $taskName): ?TaskStats
     {
         return $this->stats[$taskName] ?? null;
     }
@@ -183,16 +181,15 @@ final class Runner
     /**
      * @return array<string, TaskStats>
      */
-    public function getStats(): array
+    public function stats(): array
     {
         return $this->stats;
     }
 
     /**
-     * Get list of scheduled task names
-     * @return array<string>
+     * @return list<string>
      */
-    public function getScheduledTasks(): array
+    public function scheduled(): array
     {
         return array_keys($this->timers);
     }
