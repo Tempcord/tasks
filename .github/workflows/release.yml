@@ -1,0 +1,42 @@
+name: Release
+
+# Every merge to main is a candidate. semantic-release reads the commit subjects
+# since the last tag and decides whether there is anything to cut — a docs or
+# chore change releases nothing at all.
+on:
+  push:
+    branches: [main]
+
+# The tag, the GitHub release, and the CHANGELOG commit all need writing.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Tags are how semantic-release knows the current version, so the
+          # whole history has to be there.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: cycjimmy/semantic-release-action@v6
+        with:
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+            conventional-changelog-conventionalcommits@8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

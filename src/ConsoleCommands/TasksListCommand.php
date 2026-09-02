@@ -11,52 +11,41 @@ use Tempest\Console\ConsoleCommand;
 final readonly class TasksListCommand
 {
     public function __construct(
-        private Registry $tasksRegistry,
-        private Console  $console
+        private Registry $registry,
+        private Console $console,
     ) {}
 
     #[ConsoleCommand(name: 'tasks:list', description: 'List all registered scheduled tasks')]
     public function __invoke(): void
     {
-        $tasks = $this->tasksRegistry;
-
-        if ($tasks->count() === 0) {
+        if ($this->registry->count() === 0) {
             $this->console->writeln("<style='fg-gray'>No tasks registered</style>");
+
             return;
         }
 
         $this->console->info('Registered Tasks:');
 
-        foreach ($tasks->getAllTasks() as $index => $task) {
+        foreach ($this->registry->all() as $task) {
             $status = $task->enabled ? '<style="fg-blue">✓</style>' : '<style="fg-red">✗</style>';
-            $name = $task->getName();
-            $schedule = $task->getScheduleDescription();
             $runOnBoot = $task->runOnBoot ? " <style='fg-gray'>(runs on boot)</style>" : '';
-            $class = $task->reflector?->getDeclaringClass()->getShortName() ?? 'Unknown';
 
             $this->console->writeln(sprintf(
                 '  %s <style="fg-cyan">%s</style> - %s%s',
                 $status,
-                $name,
-                $schedule,
-                $runOnBoot
+                $task->name,
+                $task->schedule(),
+                $runOnBoot,
             ));
 
             $this->console->writeln(sprintf(
                 "     <style='fg-gray'>%s::%s()</style>",
-                $class,
-                $task->reflector?->getName() ?? 'unknown'
+                $task->handler,
+                $task->method->getName(),
             ));
-
-            if ($index < $tasks->count() - 1) {
-                $this->console->writeln('');
-            }
         }
 
         $this->console->writeln('');
-        $this->console->writeln(sprintf(
-            '<info>Total: %d task(s)</info>',
-            $tasks->count()
-        ));
+        $this->console->writeln(sprintf('<info>Total: %d task(s)</info>', $this->registry->count()));
     }
 }
