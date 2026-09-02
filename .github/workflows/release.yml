@@ -40,3 +40,11 @@ jobs:
             conventional-changelog-conventionalcommits@8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The releases page is for finding the current version, not for keeping a
+      # ledger — CHANGELOG.md is the ledger. Tags are never touched: Packagist
+      # resolves versions from them, and a lock file has to stay installable.
+      - name: Prune old release pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/prune-releases.py
