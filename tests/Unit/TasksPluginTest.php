@@ -6,7 +6,7 @@ namespace Tempcord\Plugins\Tasks\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use Tempcord\Plugins\Plugin;
+use Tempcord\Declare\Contracts\Plugin;
 use Tempcord\Plugins\Tasks\Registry;
 use Tempcord\Plugins\Tasks\TasksPlugin;
 use Tempcord\Plugins\Tasks\Tests\Doubles\RecordingLogger;

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Tempcord\Plugins\Tasks;
 
 use React\EventLoop\Loop;
-use Tempcord\Plugins\Plugin;
+use Tempcord\Declare\Contracts\Plugin;
 use Tempcord\Tempcord;
 use Tempest\Log\Logger;
 
